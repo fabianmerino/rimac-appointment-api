@@ -1,0 +1,339 @@
+org: fabianmerino
+
+app: reto-rimac
+
+service: rimac-appointment-api
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  memorySize: 512
+  timeout: 29
+  architecture: arm64
+  httpApi:
+    authorizers:
+      jwtAuthorizer:
+        type: request
+        functionName: authorizer
+  environment:
+    STAGE: ${self:provider.stage}
+    REGION: ${self:provider.region}
+    APPOINTMENTS_TABLE: ${self:service}-appointments-${self:provider.stage}
+    USERS_TABLE: ${self:service}-users-${self:provider.stage}
+    SNS_TOPIC_ARN: !Ref AppointmentTopic
+    SQS_PE_URL: !Ref AppointmentQueuePE
+    SQS_CL_URL: !Ref AppointmentQueueCL
+    SQS_COMPLETION_URL: !Ref AppointmentCompletionQueue
+    EVENT_BUS_NAME: ${self:service}-eventbus-${self:provider.stage}
+    # RDS Connection (assume existing RDS)
+    RDS_HOST: ${env:RDS_HOST, 'localhost'}
+    RDS_PORT: ${env:RDS_PORT, '3306'}
+    RDS_DATABASE: ${env:RDS_DATABASE, 'appointments'}
+    RDS_USERNAME: ${env:RDS_USERNAME, 'admin'}
+    RDS_PASSWORD: ${env:RDS_PASSWORD, 'password'}
+  iam:
+    role:
+      statements:
+        # DynamoDB permissions
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+          Resource:
+            - "Fn::GetAtt": [ AppointmentsTable, Arn ]
+            - "Fn::Join":
+                - '/'
+                - - "Fn::GetAtt": [ AppointmentsTable, Arn ]
+                  - 'index/*'
+            - "Fn::GetAtt": [ UsersTable, Arn ]
+            - "Fn::Join":
+                - '/'
+                - - "Fn::GetAtt": [ UsersTable, Arn ]
+                  - 'index/*'
+        # SNS permissions
+        - Effect: Allow
+          Action:
+            - sns:Publish
+          Resource: !Ref AppointmentTopic
+        # SQS permissions
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+          Resource:
+            - !GetAtt AppointmentQueuePE.Arn
+            - !GetAtt AppointmentQueueCL.Arn
+            - !GetAtt AppointmentCompletionQueue.Arn
+        # EventBridge permissions
+        - Effect: Allow
+          Action:
+            - events:PutEvents
+          Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${self:service}-eventbus-${self:provider.stage}'
+
+plugins:
+  - serverless-offline
+
+# Serverless v4 uses native bundling, no need for webpack
+build:
+  esbuild:
+    bundle: true
+    minify: true
+    sourcemap: true
+    target: 'node22'
+    platform: 'node'
+    format: 'cjs'
+    external:
+      - '@aws-sdk/*'
+      - 'aws-sdk'
+
+custom:
+  serverless-offline:
+    httpPort: 3000
+    lambdaPort: 3002
+
+package:
+  patterns:
+    - 'docs/**'
+
+functions:
+  # Public documentation endpoint
+  docs:
+    handler: src/handlers/docs.handler
+    events:
+      - httpApi:
+          path: /docs
+          method: get
+      - httpApi:
+          path: /docs/{proxy+}
+          method: get
+
+  # Lambda Authorizer
+  authorizer:
+    handler: src/handlers/authorizer.handler
+    environment:
+      JWT_SECRET: ${env:JWT_SECRET, 'your-secret-key'}
+
+  # Authentication lambda (no auth required)
+  auth:
+    handler: src/handlers/auth.handler
+    environment:
+      JWT_SECRET: ${env:JWT_SECRET, 'your-secret-key'}
+      USERS_TABLE: ${self:service}-users-${self:provider.stage}
+    events:
+      - httpApi:
+          path: /auth/login
+          method: post
+      - httpApi:
+          path: /auth/register
+          method: post
+
+  # Main appointment lambda (protected with authorizer)
+  appointment:
+    handler: src/handlers/appointment.handler
+    environment:
+      JWT_SECRET: ${env:JWT_SECRET, 'your-secret-key'}
+    events:
+      - httpApi:
+          path: /appointment
+          method: post
+          authorizer:
+            name: jwtAuthorizer
+      - httpApi:
+          path: /appointment/{insuredId}
+          method: get
+          authorizer:
+            name: jwtAuthorizer
+      # SQS event for completion updates (no auth needed for internal events)
+      - sqs:
+          arn: !GetAtt AppointmentCompletionQueue.Arn
+          batchSize: 1
+
+  # Country-specific appointment processors (internal, no auth needed)
+  appointmentPE:
+    handler: src/handlers/appointment-pe.handler
+    events:
+      - sqs:
+          arn: !GetAtt AppointmentQueuePE.Arn
+          batchSize: 1
+
+  appointmentCL:
+    handler: src/handlers/appointment-cl.handler
+    events:
+      - sqs:
+          arn: !GetAtt AppointmentQueueCL.Arn
+          batchSize: 1
+
+resources:
+  Resources:
+    # DynamoDB Table for appointments
+    AppointmentsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.APPOINTMENTS_TABLE}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: insuredId
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: InsuredIdIndex
+            KeySchema:
+              - AttributeName: insuredId
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+        BillingMode: PAY_PER_REQUEST
+
+    # DynamoDB Table for users
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.USERS_TABLE}
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: email
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: EmailIndex
+            KeySchema:
+              - AttributeName: email
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+        BillingMode: PAY_PER_REQUEST
+
+    # SNS Topic for appointment processing
+    AppointmentTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:service}-appointment-topic-${self:provider.stage}
+
+    # SNS Subscriptions with message filtering
+    AppointmentSubscriptionPE:
+      Type: AWS::SNS::Subscription
+      Properties:
+        Protocol: sqs
+        TopicArn: !Ref AppointmentTopic
+        Endpoint: !GetAtt AppointmentQueuePE.Arn
+        FilterPolicy:
+          countryISO:
+            - "PE"
+
+    AppointmentSubscriptionCL:
+      Type: AWS::SNS::Subscription
+      Properties:
+        Protocol: sqs
+        TopicArn: !Ref AppointmentTopic
+        Endpoint: !GetAtt AppointmentQueueCL.Arn
+        FilterPolicy:
+          countryISO:
+            - "CL"
+
+    # SQS Queues for country-specific processing
+    AppointmentQueuePE:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-appointment-pe-${self:provider.stage}
+        VisibilityTimeout: 300
+        MessageRetentionPeriod: 1209600 # 14 days
+
+    AppointmentQueueCL:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-appointment-cl-${self:provider.stage}
+        VisibilityTimeout: 300
+        MessageRetentionPeriod: 1209600 # 14 days
+
+    # SQS Queue for appointment completion notifications
+    AppointmentCompletionQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-appointment-completion-${self:provider.stage}
+        VisibilityTimeout: 300
+        MessageRetentionPeriod: 1209600 # 14 days
+
+    # SQS Queue Policies to allow SNS to send messages
+    AppointmentQueuePEPolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref AppointmentQueuePE
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: sns.amazonaws.com
+              Action: sqs:SendMessage
+              Resource: !GetAtt AppointmentQueuePE.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref AppointmentTopic
+
+    AppointmentQueueCLPolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref AppointmentQueueCL
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: sns.amazonaws.com
+              Action: sqs:SendMessage
+              Resource: !GetAtt AppointmentQueueCL.Arn
+              Condition:
+                ArnEquals:
+                  aws:SourceArn: !Ref AppointmentTopic
+
+    # EventBridge Custom Bus
+    AppointmentEventBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: ${self:provider.environment.EVENT_BUS_NAME}
+
+    # EventBridge Rule to send completion events to SQS
+    AppointmentCompletionRule:
+      Type: AWS::Events::Rule
+      Properties:
+        EventBusName: !Ref AppointmentEventBus
+        EventPattern:
+          source:
+            - "appointment.service"
+          detail-type:
+            - "Appointment Completed"
+        Targets:
+          - Arn: !GetAtt AppointmentCompletionQueue.Arn
+            Id: "AppointmentCompletionTarget"
+
+    # EventBridge permission to send messages to SQS
+    AppointmentCompletionQueuePolicy:
+      Type: AWS::SQS::QueuePolicy
+      Properties:
+        Queues:
+          - !Ref AppointmentCompletionQueue
+        PolicyDocument:
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: events.amazonaws.com
+              Action: sqs:SendMessage
+              Resource: !GetAtt AppointmentCompletionQueue.Arn

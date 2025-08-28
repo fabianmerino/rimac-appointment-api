@@ -1,0 +1,442 @@
+openapi: 3.0.3
+info:
+  title: Rimac Medical Appointment API
+  description: |
+    REST API for medical appointment scheduling system.
+
+    This API provides endpoints to:
+    - Create medical appointment requests
+    - Retrieve appointment history by insured ID
+
+    The system processes appointments asynchronously using AWS services (SNS, SQS, EventBridge)
+    and supports different processing logic for Peru (PE) and Chile (CL).
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@rimac.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+paths:
+  /appointment:
+    post:
+      summary: Create a new medical appointment request
+      description: |
+        Creates a new appointment request that will be processed asynchronously.
+        The appointment will be saved with 'pending' status and sent to the appropriate
+        country-specific processing queue.
+      operationId: createAppointment
+      tags:
+        - Appointments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppointmentRequest'
+            examples:
+              peru_appointment:
+                summary: Appointment for Peru
+                value:
+                  insuredId: "12345"
+                  scheduleId: 100
+                  countryISO: "PE"
+              chile_appointment:
+                summary: Appointment for Chile
+                value:
+                  insuredId: "00987"
+                  scheduleId: 101
+                  countryISO: "CL"
+      responses:
+        '201':
+          description: Appointment request created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppointmentResponse'
+              example:
+                success: true
+                data:
+                  id: "123e4567-e89b-12d3-a456-426614174000"
+                  insuredId: "12345"
+                  scheduleId: 100
+                  countryISO: "PE"
+                  status: "pending"
+                  createdAt: "2024-09-30T10:00:00Z"
+                  updatedAt: "2024-09-30T10:00:00Z"
+                message: "Appointment request created successfully. Processing in progress."
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_country:
+                  summary: Invalid country code
+                  value:
+                    success: false
+                    error: "countryISO must be either 'PE' or 'CL'"
+                invalid_insured_id:
+                  summary: Invalid insured ID
+                  value:
+                    success: false
+                    error: "insuredId must be a valid 5-digit number"
+                schedule_not_found:
+                  summary: Schedule not found
+                  value:
+                    success: false
+                    error: "Schedule with ID 999 not found"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /appointment/{insuredId}:
+    get:
+      summary: Get appointments by insured ID
+      description: |
+        Retrieves all appointments for a specific insured person.
+        Returns appointments ordered by creation date (most recent first).
+      operationId: getAppointmentsByInsuredId
+      tags:
+        - Appointments
+      parameters:
+        - name: insuredId
+          in: path
+          required: true
+          description: The insured person's ID (1-5 digits, will be padded with leading zeros)
+          schema:
+            type: string
+            pattern: '^\\d{1,5}$'
+            example: "12345"
+      responses:
+        '200':
+          description: Appointments retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppointmentListResponse'
+              example:
+                success: true
+                data:
+                  - id: "123e4567-e89b-12d3-a456-426614174000"
+                    insuredId: "12345"
+                    scheduleId: 100
+                    countryISO: "PE"
+                    status: "completed"
+                    createdAt: "2024-09-30T10:00:00Z"
+                    updatedAt: "2024-09-30T10:05:00Z"
+                    completedAt: "2024-09-30T10:05:00Z"
+                  - id: "456e7890-e89b-12d3-a456-426614174001"
+                    insuredId: "12345"
+                    scheduleId: 101
+                    countryISO: "PE"
+                    status: "pending"
+                    createdAt: "2024-09-29T15:30:00Z"
+                    updatedAt: "2024-09-29T15:30:00Z"
+                message: "Found 2 appointments for insured ID 12345"
+        '400':
+          description: Invalid insured ID format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error: "insuredId must be a valid 5-digit number"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/register:
+    post:
+      summary: Register a new user
+      description: Creates a new user account and returns a JWT token upon successful registration.
+      operationId: registerUser
+      tags:
+        - Authentication
+      security: [] # This endpoint is public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid input data (e.g., email already exists, invalid password)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/login:
+    post:
+      summary: Log in a user
+      description: Authenticates a user with email and password, and returns a JWT token.
+      operationId: loginUser
+      tags:
+        - Authentication
+      security: [] # This endpoint is public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    # AUTHENTICATION SCHEMAS
+    RegisterRequest:
+      type: object
+      required:
+        - name
+        - email
+        - password
+        - insuredId
+        - countryISO
+      properties:
+        name:
+          type: string
+          example: "John Doe"
+        email:
+          type: string
+          format: email
+          example: "john.doe@example.com"
+        password:
+          type: string
+          format: password
+          description: "Must be at least 8 characters, with one letter and one number."
+          example: "Password123"
+        insuredId:
+          type: string
+          pattern: '^\\d{1,5}$'
+          description: "The insured person's ID (1-5 digits)"
+          example: "67890"
+        countryISO:
+          type: string
+          enum: [PE, CL]
+          description: "Country code (Peru or Chile)"
+          example: "PE"
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: "john.doe@example.com"
+        password:
+          type: string
+          format: password
+          example: "Password123"
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        insuredId:
+          type: string
+        countryISO:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    AuthResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+            token:
+              type: string
+              description: "JWT token for authentication"
+              example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        message:
+          type: string
+          example: "Authentication successful"
+
+    # APPOINTMENT SCHEMAS
+    AppointmentRequest:
+      type: object
+      required:
+        - insuredId
+        - scheduleId
+        - countryISO
+      properties:
+        insuredId:
+          type: string
+          pattern: '^\\d{1,5}$'
+          description: The insured person's ID (1-5 digits, can have leading zeros)
+          example: "12345"
+        scheduleId:
+          type: integer
+          minimum: 1
+          description: Identifier for the appointment slot (centro médico, especialidad, médico, fecha y hora)
+          example: 100
+        countryISO:
+          type: string
+          enum: [PE, CL]
+          description: Country code (Peru or Chile)
+          example: "PE"
+
+    Appointment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique appointment identifier
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        insuredId:
+          type: string
+          description: The insured person's ID (padded to 5 digits)
+          example: "12345"
+        scheduleId:
+          type: integer
+          description: Identifier for the appointment slot
+          example: 100
+        countryISO:
+          type: string
+          enum: [PE, CL]
+          description: Country code
+          example: "PE"
+        status:
+          type: string
+          enum: [pending, completed, failed]
+          description: Current appointment status
+          example: "pending"
+        createdAt:
+          type: string
+          format: date-time
+          description: When the appointment was created
+          example: "2024-09-30T10:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the appointment was last updated
+          example: "2024-09-30T10:00:00Z"
+        processingStartedAt:
+          type: string
+          format: date-time
+          description: When processing started (optional)
+          example: "2024-09-30T10:01:00Z"
+        completedAt:
+          type: string
+          format: date-time
+          description: When the appointment was completed (optional)
+          example: "2024-09-30T10:05:00Z"
+        errorMessage:
+          type: string
+          description: Error message if appointment failed (optional)
+          example: "Schedule no longer available"
+
+    AppointmentResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Appointment'
+        message:
+          type: string
+          example: "Appointment request created successfully. Processing in progress."
+
+    AppointmentListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Appointment'
+        message:
+          type: string
+          example: "Found 2 appointments for insured ID 12345"
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: "Invalid request data"
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+# Global security (can be overridden per operation)
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Appointments
+    description: Medical appointment management operations
+  - name: Authentication
+    description: User registration and login operations
