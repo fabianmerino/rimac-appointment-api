@@ -88,7 +88,7 @@ API Gateway → Lambda (appointment) → DynamoDB
 
 3. **Desarrollo local**:
    ```bash
-   pnpm dev
+   pnpm start:local
    ```
    Accede a: http://localhost:3000
 
