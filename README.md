@@ -2,20 +2,9 @@
 
 Sistema backend serverless para agendamiento de citas médicas usando AWS Lambda, construido con TypeScript y el Serverless Framework.
 
-## 📋 Descripción del Proyecto
+## 📋 Descripción
 
-Este sistema permite a los asegurados agendar citas médicas. La arquitectura está diseñada para procesar solicitudes de manera asíncrona y soporta diferentes países (Perú y Chile) con lógicas de procesamiento específicas.
-
-Adicionalmente, cuenta con un sistema de **autenticación basado en JWT** para proteger las rutas y una **documentación de API interactiva** construida con Scalar.
-
-### Flujo del Sistema
-
-1. **Recepción**: Un Lambda recibe la petición POST y guarda en DynamoDB con estado "pending"
-2. **Distribución**: El Lambda envía la información a SNS con filtros por país
-3. **Procesamiento**: SNS distribuye a SQS específicos por país (PE/CL)
-4. **Almacenamiento**: Lambdas específicos procesan desde SQS y guardan en RDS MySQL
-5. **Confirmación**: Los lambdas envían eventos de confirmación via EventBridge
-6. **Actualización**: EventBridge envía a SQS que actualiza el estado a "completed" en DynamoDB
+Este sistema permite a los asegurados agendar citas médicas con procesamiento asíncrono específico por país (Perú y Chile). Incluye autenticación JWT y documentación interactiva con Scalar.
 
 ## 🏗️ Arquitectura
 
@@ -41,153 +30,88 @@ API Gateway → Lambda (appointment) → DynamoDB
             DynamoDB
 ```
 
-## 🛠️ Tecnologías Utilizadas
+## 🛠️ Tecnologías
 
 - **Runtime**: Node.js 20.x
 - **Lenguaje**: TypeScript
 - **Framework**: Serverless Framework v4
-- **Bundler**: ESBuild (nativo en v4)
-- **Servicios AWS**:
-  - Lambda Functions
-  - API Gateway (HTTP API v2)
-  - DynamoDB
-  - SNS (Simple Notification Service)
-  - SQS (Simple Queue Service)
-  - EventBridge
-  - RDS MySQL
-- **Arquitectura**: Clean Architecture con principios SOLID
-- **Patrones**: Repository, Dependency Injection
-- **Testing**: Jest
-- **Documentación**: OpenAPI 3.0
+- **Servicios AWS**: Lambda, API Gateway, DynamoDB, SNS, SQS, EventBridge, RDS
+- **Documentación**: OpenAPI 3.0 con Scalar
 
 ## 📁 Estructura del Proyecto
 
 ```
 ├── docs/
-│   ├── api.yaml                    # Documentación OpenAPI/Swagger
-│   └── Reto - Rimac Backend.pdf    # Especificaciones del reto
+│   ├── api.yaml                    # Especificación OpenAPI 3.0
+│   └── index.html                  # Interfaz Scalar
 ├── src/
-│   ├── application/
-│   │   └── usecases/               # Casos de uso de la aplicación
+│   ├── application/usecases/       # Casos de uso
 │   ├── domain/
 │   │   ├── entities/               # Entidades del dominio
+│   │   ├── repositories/           # Interfaces de repositorios
 │   │   └── services/               # Servicios del dominio
 │   ├── infrastructure/
-│   │   ├── repositories/           # Implementaciones de repositorios
-│   │   └── services/               # Servicios de infraestructura
-│   ├── handlers/                   # Handlers de AWS Lambda
-│   ├── types/                      # Definiciones de tipos TypeScript
+│   │   ├── repositories/           # Implementaciones DynamoDB/MySQL
+│   │   └── services/               # Servicios AWS
+│   ├── handlers/                   # Handlers Lambda
+│   ├── types/                      # Tipos TypeScript
 │   └── utils/                      # Utilidades
 ├── tests/                          # Tests unitarios
-├── scripts/                        # Scripts de deployment y utilidades
-├── serverless.yml                  # Configuración Serverless Framework
-├── package.json
-├── tsconfig.json
-├── jest.config.js
-└── README.md
+└── scripts/                        # Scripts de deployment
 ```
 
 ## 🌐 Endpoints de la API
 
-La URL base para el entorno local es `http://localhost:3000`.
+### Autenticación (Públicos)
+- `POST /auth/register` - Registra un nuevo usuario
+- `POST /auth/login` - Autentica usuario existente
 
-### Autenticación
+### Citas Médicas (Requieren JWT)
+- `POST /appointment` - Crea nueva cita médica
+- `GET /appointment/{insuredId}` - Obtiene historial de citas
 
-Estos endpoints son públicos y no requieren token de autenticación.
+### Documentación
+- `GET /docs` - Documentación interactiva (Scalar)
 
-- **`POST /auth/register`**
-  - **Descripción**: Registra un nuevo usuario en el sistema.
-  - **Body**: `name`, `email`, `password`, `insuredId`, `countryISO`.
-  - **Respuesta**: Devuelve los datos del usuario y un token JWT.
+## 🚀 Instalación y Uso
 
-- **`POST /auth/login`**
-  - **Descripción**: Autentica a un usuario existente.
-  - **Body**: `email`, `password`.
-  - **Respuesta**: Devuelve los datos del usuario y un token JWT.
-
-### Citas Médicas (Appointments)
-
-Estos endpoints requieren un token JWT válido en la cabecera `Authorization`.
-
-- **`POST /appointment`**
-  - **Descripción**: Crea una nueva solicitud de cita médica. La solicitud se procesa de forma asíncrona.
-  - **Body**: `insuredId`, `scheduleId`, `countryISO`.
-  - **Respuesta**: Confirma la recepción de la solicitud y devuelve los detalles de la cita con estado `pending`.
-
-- **`GET /appointment/{insuredId}`**
-  - **Descripción**: Obtiene el historial de citas para un asegurado específico.
-  - **Parámetro**: `insuredId` (ID del asegurado).
-  - **Respuesta**: Lista de todas las citas del asegurado.
-
-### Documentación de la API
-
-- **`GET /docs`**
-  - **Descripción**: Sirve la documentación interactiva de la API utilizando Scalar. Es la forma recomendada de explorar y probar los endpoints.
-
-## 🚀 Instalación y Configuración
-
-### Prerrequisitos
-
-- Node.js 20.x o superior
-- AWS CLI configurado
-- Serverless Framework v4 CLI (`npm install -g serverless@4`)
-- `pnpm` como gestor de paquetes (`npm install -g pnpm`)
-- Acceso a una instancia RDS MySQL (o configuración local)
-
-### Configuración
-
-1. **Clonar el repositorio**:
-   ```bash
-   git clone https://github.com/tu-usuario/rimac-appointment-api.git
-   cd rimac-appointment-api
-   ```
-
-2. **Instalar dependencias**:
+1. **Instalar dependencias**:
    ```bash
    pnpm install
    ```
 
-3. **Variables de entorno**:
-   - Crea un archivo `.env` en la raíz del proyecto.
-   - Define las variables de conexión a tu base de datos RDS. Puedes usar el archivo `params.yml` como guía para las variables necesarias (`RDS_HOST`, `RDS_PORT`, etc.).
+2. **Configurar variables de entorno**:
+   ```bash
+   cp .env.example .env
+   # Editar .env con tus valores
+   ```
 
-## 💻 Desarrollo Local
+3. **Desarrollo local**:
+   ```bash
+   pnpm dev
+   ```
+   Accede a: http://localhost:3000
 
-Para levantar el entorno de desarrollo local, que simula API Gateway y Lambda, ejecuta:
-
-```bash
-pnpm dev
-```
-
-Este comando utiliza `serverless offline` para iniciar el servicio. Los endpoints estarán disponibles en `http://localhost:3000`.
-
-La documentación interactiva estará disponible en:
-**[http://localhost:3000/docs](http://localhost:3000/docs)**
+4. **Documentación**: http://localhost:3000/docs
 
 ## 📦 Despliegue
 
-El proyecto incluye scripts para facilitar el despliegue en diferentes entornos.
+```bash
+# Desarrollo
+pnpm deploy:dev
 
-- **Desplegar en `dev`**:
-  ```bash
-  pnpm deploy:dev
-  ```
-
-- **Desplegar en `prod`**:
-  ```bash
-  pnpm deploy:prod
-  ```
-
-- **Eliminar el servicio**:
-  - Para `dev`: `pnpm remove:dev`
-  - Para `prod`: `pnpm remove:prod`
+# Producción
+pnpm deploy:prod
+```
 
 ## ✅ Testing
 
-Para ejecutar los tests unitarios, utiliza el siguiente comando:
-
 ```bash
+# Ejecutar tests
 pnpm test
+
+# Con cobertura
+pnpm test:coverage
 ```
 
 ## 📄 Licencia
